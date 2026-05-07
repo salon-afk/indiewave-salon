@@ -10,8 +10,14 @@ const path = require("path");
 const fs = require("fs");
 
 const app = express();
+
+app.get('/', (req, res) => {
+  res.send('Backend running successfully 🚀');
+});
+
 const PORT = process.env.PORT || 8080;
 const SECRET = process.env.JWT_SECRET || "indiewave_secret_key";
+
 
 const cosmosClient = new CosmosClient({
   endpoint: process.env.COSMOS_ENDPOINT,
