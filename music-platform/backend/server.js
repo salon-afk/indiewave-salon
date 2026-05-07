@@ -10,7 +10,7 @@ const fs = require("fs");
 const mm = require("music-metadata");
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 8080;
 const SECRET = "indiewave_secret_key";
 
 const blobServiceClient = BlobServiceClient.fromConnectionString(
