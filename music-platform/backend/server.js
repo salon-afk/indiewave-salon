@@ -18,12 +18,6 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-const app = express();
-
-app.get('/', (req, res) => {
-  res.send('Backend running successfully 🚀');
-});
-
 const PORT = process.env.PORT || 8080;
 const SECRET = process.env.JWT_SECRET || "indiewave_secret_key";
 
