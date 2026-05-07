@@ -7,15 +7,18 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const path = require("path");
 const fs = require("fs");
-const mm = require("music-metadata");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const SECRET = "indiewave_secret_key";
 
-const blobServiceClient = BlobServiceClient.fromConnectionString(
-  process.env.AZURE_STORAGE_CONNECTION_STRING || ""
-);
+let blobServiceClient = null;
+
+if (process.env.AZURE_STORAGE_CONNECTION_STRING) {
+  blobServiceClient = BlobServiceClient.fromConnectionString(
+    process.env.AZURE_STORAGE_CONNECTION_STRING
+  );
+}
 const containerName = process.env.AZURE_STORAGE_CONTAINER || "music-files";
 
 app.use(cors());
@@ -30,7 +33,11 @@ if (!fs.existsSync(uploadsPath)) fs.mkdirSync(uploadsPath);
 app.use(express.static(publicPath));
 app.use("/uploads", express.static(uploadsPath));
 
-const db = new sqlite3.Database("./database.db");
+const dbPath = process.env.WEBSITE_SITE_NAME
+  ? "/home/database.db"
+  : path.join(__dirname, "database.db");
+
+const db = new sqlite3.Database(dbPath);
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -146,7 +153,9 @@ app.post("/api/songs", auth, upload.single("audio"), async (req, res) => {
   let bitrate = "";
 
   try {
+    const mm = await import("music-metadata");
     const meta = await mm.parseFile(req.file.path);
+
     duration = meta.format.duration ? Math.round(meta.format.duration) + " sec" : "";
     bitrate = meta.format.bitrate ? Math.round(meta.format.bitrate / 1000) + " kbps" : "";
   } catch {}
@@ -154,7 +163,10 @@ app.post("/api/songs", auth, upload.single("audio"), async (req, res) => {
   let fileUrl = "/uploads/" + req.file.filename;
 
   try {
-    const containerClient = blobServiceClient.getContainerClient(containerName);
+    if (!blobServiceClient) throw new Error("Azure Storage connection string missing");
+
+const containerClient = blobServiceClient.getContainerClient(containerName);
+await containerClient.createIfNotExists();
     const blockBlobClient = containerClient.getBlockBlobClient(req.file.filename);
 
     await blockBlobClient.uploadFile(req.file.path, {
