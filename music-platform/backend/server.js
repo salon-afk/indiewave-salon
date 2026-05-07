@@ -8,6 +8,19 @@ const jwt = require("jsonwebtoken");
 const path = require("path");
 const fs = require("fs");
 
+const express = require('express');
+const path = require('path');
+
+const app = express();
+
+// ✅ Serve frontend files
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ✅ Default route
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 const app = express();
 
 app.get('/', (req, res) => {
