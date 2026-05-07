@@ -1,7 +1,4 @@
 const { BlobServiceClient } = require("@azure/storage-blob");
-try {
-  require("dotenv").config();
-} catch {}
 const { CosmosClient } = require("@azure/cosmos");
 const express = require("express");
 const multer = require("multer");
