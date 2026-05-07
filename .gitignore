@@ -1,0 +1,5 @@
+node_modules/
+music-platform/backend/node_modules/
+.env
+database.db
+uploads/
