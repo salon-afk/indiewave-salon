@@ -1,6 +1,7 @@
 const { BlobServiceClient } = require("@azure/storage-blob");
+require("dotenv").config();
+const { CosmosClient } = require("@azure/cosmos");
 const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
 const multer = require("multer");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
@@ -10,14 +11,22 @@ const fs = require("fs");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-const SECRET = "indiewave_secret_key";
+const SECRET = process.env.JWT_SECRET || "indiewave_secret_key";
+
+const cosmosClient = new CosmosClient({
+  endpoint: process.env.COSMOS_ENDPOINT,
+  key: process.env.COSMOS_KEY
+});
+
+const database = cosmosClient.database(process.env.COSMOS_DATABASE_ID || "indiewave-db");
+const usersContainer = database.container("users");
+const songsContainer = database.container("songs");
+const favouritesContainer = database.container("favourites");
+const playlistsContainer = database.container("playlists");
 
 let blobServiceClient = null;
-
 if (process.env.AZURE_STORAGE_CONNECTION_STRING) {
-  blobServiceClient = BlobServiceClient.fromConnectionString(
-    process.env.AZURE_STORAGE_CONNECTION_STRING
-  );
+  blobServiceClient = BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION_STRING);
 }
 const containerName = process.env.AZURE_STORAGE_CONTAINER || "music-files";
 
@@ -27,68 +36,10 @@ app.use(express.urlencoded({ extended: true }));
 
 const publicPath = path.join(__dirname, "../public");
 const uploadsPath = path.join(__dirname, "uploads");
-
 if (!fs.existsSync(uploadsPath)) fs.mkdirSync(uploadsPath);
 
 app.use(express.static(publicPath));
 app.use("/uploads", express.static(uploadsPath));
-
-const dbPath = process.env.WEBSITE_SITE_NAME
-  ? "/home/database.db"
-  : path.join(__dirname, "database.db");
-
-const db = new sqlite3.Database(dbPath);
-
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    email TEXT UNIQUE,
-    password TEXT
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS songs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT,
-    artist TEXT,
-    album TEXT,
-    genre TEXT,
-    mood TEXT,
-    language TEXT,
-    release_year TEXT,
-    duration TEXT,
-    file_size TEXT,
-    mime_type TEXT,
-    bitrate TEXT,
-    tags TEXT,
-    description TEXT,
-    file_path TEXT,
-    uploaded_by INTEGER,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS favourites (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    song_id INTEGER,
-    UNIQUE(user_id, song_id)
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS playlists (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    description TEXT,
-    user_id INTEGER,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS playlist_songs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    playlist_id INTEGER,
-    song_id INTEGER,
-    UNIQUE(playlist_id, song_id)
-  )`);
-});
 
 const storage = multer.diskStorage({
   destination: uploadsPath,
@@ -97,7 +48,6 @@ const storage = multer.diskStorage({
     cb(null, unique);
   }
 });
-
 const upload = multer({ storage });
 
 function auth(req, res, next) {
@@ -113,233 +63,304 @@ function auth(req, res, next) {
   }
 }
 
-app.post("/api/register", async (req, res) => {
-  const { name, email, password } = req.body;
+function newId() {
+  return Date.now().toString();
+}
 
-  if (!name || !email || !password) {
-    return res.status(400).json({ message: "Please fill all fields" });
-  }
-
-  const hashed = await bcrypt.hash(password, 10);
-
-  db.run(
-    "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
-    [name, email, hashed],
-    function (err) {
-      if (err) return res.status(400).json({ message: "Email already exists" });
-      res.json({ message: "Registered successfully" });
-    }
-  );
+app.get("/test", async (req, res) => {
+  res.json({ message: "Cosmos backend working" });
 });
 
-app.post("/api/login", (req, res) => {
-  const { email, password } = req.body;
+app.post("/api/register", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ message: "Please fill all fields" });
 
-  db.get("SELECT * FROM users WHERE email = ?", [email], async (err, user) => {
+    const query = {
+      query: "SELECT * FROM c WHERE c.email = @email",
+      parameters: [{ name: "@email", value: email }]
+    };
+
+    const { resources } = await usersContainer.items.query(query).fetchAll();
+    if (resources.length > 0) return res.status(400).json({ message: "Email already exists" });
+
+    const hashed = await bcrypt.hash(password, 10);
+    const user = {
+      id: newId(),
+      name,
+      email,
+      password: hashed,
+      created_at: new Date().toISOString()
+    };
+
+    await usersContainer.items.create(user);
+    res.json({ message: "Registered successfully" });
+  } catch (err) {
+    res.status(500).json({ message: "Register failed", error: err.message });
+  }
+});
+
+app.post("/api/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const query = {
+      query: "SELECT * FROM c WHERE c.email = @email",
+      parameters: [{ name: "@email", value: email }]
+    };
+
+    const { resources } = await usersContainer.items.query(query).fetchAll();
+    const user = resources[0];
+
     if (!user) return res.status(400).json({ message: "Invalid email or password" });
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(400).json({ message: "Invalid email or password" });
 
     const token = jwt.sign({ id: user.id, name: user.name, email: user.email }, SECRET);
-    res.json({ message: "Login successful", token, user: { id: user.id, name: user.name, email: user.email } });
-  });
+    res.json({
+      message: "Login successful",
+      token,
+      user: { id: user.id, name: user.name, email: user.email }
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Login failed", error: err.message });
+  }
 });
 
 app.post("/api/songs", auth, upload.single("audio"), async (req, res) => {
-  if (!req.file) return res.status(400).json({ message: "Audio file required" });
-
-  let duration = "";
-  let bitrate = "";
-
   try {
-    const mm = await import("music-metadata");
-    const meta = await mm.parseFile(req.file.path);
+    if (!req.file) return res.status(400).json({ message: "Audio file required" });
 
-    duration = meta.format.duration ? Math.round(meta.format.duration) + " sec" : "";
-    bitrate = meta.format.bitrate ? Math.round(meta.format.bitrate / 1000) + " kbps" : "";
-  } catch {}
+    let duration = "";
+    let bitrate = "";
 
-  let fileUrl = "/uploads/" + req.file.filename;
+    try {
+      const mm = await import("music-metadata");
+      const meta = await mm.parseFile(req.file.path);
+      duration = meta.format.duration ? Math.round(meta.format.duration) + " sec" : "";
+      bitrate = meta.format.bitrate ? Math.round(meta.format.bitrate / 1000) + " kbps" : "";
+    } catch {}
 
-  try {
-    if (!blobServiceClient) throw new Error("Azure Storage connection string missing");
+    let fileUrl = "/uploads/" + req.file.filename;
 
-const containerClient = blobServiceClient.getContainerClient(containerName);
-await containerClient.createIfNotExists();
-    const blockBlobClient = containerClient.getBlockBlobClient(req.file.filename);
+    try {
+      if (blobServiceClient) {
+        const containerClient = blobServiceClient.getContainerClient(containerName);
+        await containerClient.createIfNotExists();
+        const blockBlobClient = containerClient.getBlockBlobClient(req.file.filename);
 
-    await blockBlobClient.uploadFile(req.file.path, {
-      blobHTTPHeaders: {
-        blobContentType: req.file.mimetype
+        await blockBlobClient.uploadFile(req.file.path, {
+          blobHTTPHeaders: { blobContentType: req.file.mimetype }
+        });
+
+        fileUrl = blockBlobClient.url;
+        fs.unlinkSync(req.file.path);
       }
-    });
+    } catch (error) {
+      console.log("Blob upload failed, using local upload:", error.message);
+    }
 
-    fileUrl = blockBlobClient.url;
-
-    fs.unlinkSync(req.file.path);
-  } catch (error) {
-    console.log("Blob upload failed, using local upload:", error.message);
-  }
-
-  const {
-    title, artist, album, genre, mood,
-    language, release_year, tags, description
-  } = req.body;
-
-  db.run(
-    `INSERT INTO songs 
-    (title, artist, album, genre, mood, language, release_year, duration, file_size, mime_type, bitrate, tags, description, file_path, uploaded_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      title, artist, album, genre, mood, language, release_year,
+    const song = {
+      id: newId(),
+      title: req.body.title || "",
+      artist: req.body.artist || "",
+      album: req.body.album || "",
+      genre: req.body.genre || "",
+      mood: req.body.mood || "",
+      language: req.body.language || "",
+      release_year: req.body.release_year || "",
       duration,
-      req.file.size + " bytes",
-      req.file.mimetype,
+      file_size: req.file.size + " bytes",
+      mime_type: req.file.mimetype,
       bitrate,
-      tags,
-      description,
-      fileUrl,
-      req.user.id
-    ],
-    function (err) {
-      if (err) return res.status(500).json({ message: "Upload failed" });
-      res.json({ message: "Song uploaded successfully" });
-    }
-  );
-});
+      tags: req.body.tags || "",
+      description: req.body.description || "",
+      file_path: fileUrl,
+      uploaded_by: req.user.id,
+      created_at: new Date().toISOString()
+    };
 
-app.get("/api/songs", auth, (req, res) => {
-  const q = `%${req.query.search || ""}%`;
-  const genre = req.query.genre || "";
-
-  let sql = `
-    SELECT songs.*,
-    CASE WHEN favourites.id IS NULL THEN 0 ELSE 1 END AS liked
-    FROM songs
-    LEFT JOIN favourites ON songs.id = favourites.song_id AND favourites.user_id = ?
-    WHERE (title LIKE ? OR artist LIKE ? OR album LIKE ? OR genre LIKE ? OR mood LIKE ? OR tags LIKE ?)
-  `;
-
-  const params = [req.user.id, q, q, q, q, q, q];
-
-  if (genre) {
-    sql += " AND genre = ?";
-    params.push(genre);
+    await songsContainer.items.create(song);
+    res.json({ message: "Song uploaded successfully" });
+  } catch (err) {
+    res.status(500).json({ message: "Upload failed", error: err.message });
   }
-
-  sql += " ORDER BY songs.id DESC";
-
-  db.all(sql, params, (err, rows) => {
-    if (err) return res.status(500).json({ message: "Could not load songs" });
-    res.json(rows);
-  });
 });
 
-app.put("/api/songs/:id", auth, (req, res) => {
-  const { title, artist, album, genre, mood, language, release_year, tags, description } = req.body;
+app.get("/api/songs", auth, async (req, res) => {
+  try {
+    const search = (req.query.search || "").toLowerCase();
+    const genre = req.query.genre || "";
 
-  db.run(
-    `UPDATE songs SET title=?, artist=?, album=?, genre=?, mood=?, language=?, release_year=?, tags=?, description=? WHERE id=?`,
-    [title, artist, album, genre, mood, language, release_year, tags, description, req.params.id],
-    function (err) {
-      if (err) return res.status(500).json({ message: "Update failed" });
-      res.json({ message: "Song updated successfully" });
-    }
-  );
-});
+    const { resources: songs } = await songsContainer.items.readAll().fetchAll();
+    const { resources: favs } = await favouritesContainer.items
+      .query({
+        query: "SELECT * FROM c WHERE c.user_id = @user_id",
+        parameters: [{ name: "@user_id", value: req.user.id }]
+      })
+      .fetchAll();
 
-app.delete("/api/songs/:id", auth, (req, res) => {
-  db.get("SELECT file_path FROM songs WHERE id=?", [req.params.id], (err, song) => {
-    if (song && song.file_path) {
-      const fullPath = path.join(__dirname, song.file_path.replace("/uploads", "uploads"));
-      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    const favIds = favs.map(f => f.song_id);
+
+    let filtered = songs;
+
+    if (search) {
+      filtered = filtered.filter(s =>
+        `${s.title} ${s.artist} ${s.album} ${s.genre} ${s.mood} ${s.tags}`.toLowerCase().includes(search)
+      );
     }
 
-    db.run("DELETE FROM songs WHERE id=?", [req.params.id], () => {
-      res.json({ message: "Song deleted successfully" });
-    });
-  });
+    if (genre) {
+      filtered = filtered.filter(s => s.genre === genre);
+    }
+
+    filtered = filtered
+      .map(s => ({ ...s, liked: favIds.includes(s.id) ? 1 : 0 }))
+      .sort((a, b) => Number(b.id) - Number(a.id));
+
+    res.json(filtered);
+  } catch (err) {
+    res.status(500).json({ message: "Could not load songs", error: err.message });
+  }
 });
 
-app.post("/api/favourites/:songId", auth, (req, res) => {
-  db.run(
-    "INSERT OR IGNORE INTO favourites (user_id, song_id) VALUES (?, ?)",
-    [req.user.id, req.params.songId],
-    () => res.json({ message: "Added to favourites" })
-  );
+app.put("/api/songs/:id", auth, async (req, res) => {
+  try {
+    const { resource: song } = await songsContainer.item(req.params.id, req.params.id).read();
+    if (!song) return res.status(404).json({ message: "Song not found" });
+
+    const updated = { ...song, ...req.body };
+    await songsContainer.item(req.params.id, req.params.id).replace(updated);
+
+    res.json({ message: "Song updated successfully" });
+  } catch (err) {
+    res.status(500).json({ message: "Update failed", error: err.message });
+  }
 });
 
-app.delete("/api/favourites/:songId", auth, (req, res) => {
-  db.run(
-    "DELETE FROM favourites WHERE user_id=? AND song_id=?",
-    [req.user.id, req.params.songId],
-    () => res.json({ message: "Removed from favourites" })
-  );
+app.delete("/api/songs/:id", auth, async (req, res) => {
+  try {
+    await songsContainer.item(req.params.id, req.params.id).delete();
+    res.json({ message: "Song deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ message: "Delete failed", error: err.message });
+  }
 });
 
-app.get("/api/favourites", auth, (req, res) => {
-  db.all(
-    `SELECT songs.* FROM songs
-     JOIN favourites ON songs.id = favourites.song_id
-     WHERE favourites.user_id = ?
-     ORDER BY favourites.id DESC`,
-    [req.user.id],
-    (err, rows) => res.json(rows || [])
-  );
+app.post("/api/favourites/:songId", auth, async (req, res) => {
+  try {
+    const fav = {
+      id: `${req.user.id}-${req.params.songId}`,
+      user_id: req.user.id,
+      song_id: req.params.songId
+    };
+
+    await favouritesContainer.items.upsert(fav);
+    res.json({ message: "Added to favourites" });
+  } catch (err) {
+    res.status(500).json({ message: "Favourite failed", error: err.message });
+  }
 });
 
-app.post("/api/playlists", auth, (req, res) => {
-  const { name, description } = req.body;
-
-  db.run(
-    "INSERT INTO playlists (name, description, user_id) VALUES (?, ?, ?)",
-    [name, description, req.user.id],
-    () => res.json({ message: "Playlist created" })
-  );
+app.delete("/api/favourites/:songId", auth, async (req, res) => {
+  try {
+    const id = `${req.user.id}-${req.params.songId}`;
+    await favouritesContainer.item(id, id).delete();
+    res.json({ message: "Removed from favourites" });
+  } catch {
+    res.json({ message: "Removed from favourites" });
+  }
 });
 
-app.get("/api/playlists", auth, (req, res) => {
-  db.all("SELECT * FROM playlists WHERE user_id=? ORDER BY id DESC", [req.user.id], (err, rows) => {
-    res.json(rows || []);
-  });
+app.get("/api/favourites", auth, async (req, res) => {
+  try {
+    const { resources: favs } = await favouritesContainer.items
+      .query({
+        query: "SELECT * FROM c WHERE c.user_id = @user_id",
+        parameters: [{ name: "@user_id", value: req.user.id }]
+      })
+      .fetchAll();
+
+    const { resources: songs } = await songsContainer.items.readAll().fetchAll();
+    const favIds = favs.map(f => f.song_id);
+
+    res.json(songs.filter(s => favIds.includes(s.id)));
+  } catch (err) {
+    res.status(500).json({ message: "Could not load favourites", error: err.message });
+  }
 });
 
-app.post("/api/playlists/:playlistId/songs/:songId", auth, (req, res) => {
-  db.run(
-    "INSERT OR IGNORE INTO playlist_songs (playlist_id, song_id) VALUES (?, ?)",
-    [req.params.playlistId, req.params.songId],
-    () => res.json({ message: "Song added to playlist" })
-  );
+app.post("/api/playlists", auth, async (req, res) => {
+  try {
+    const playlist = {
+      id: newId(),
+      name: req.body.name,
+      description: req.body.description || "",
+      user_id: req.user.id,
+      songs: [],
+      created_at: new Date().toISOString()
+    };
+
+    await playlistsContainer.items.create(playlist);
+    res.json({ message: "Playlist created" });
+  } catch (err) {
+    res.status(500).json({ message: "Playlist failed", error: err.message });
+  }
 });
 
-app.get("/api/playlists/:id/songs", auth, (req, res) => {
-  db.all(
-    `SELECT songs.* FROM songs
-     JOIN playlist_songs ON songs.id = playlist_songs.song_id
-     WHERE playlist_songs.playlist_id=?`,
-    [req.params.id],
-    (err, rows) => res.json(rows || [])
-  );
+app.get("/api/playlists", auth, async (req, res) => {
+  try {
+    const { resources } = await playlistsContainer.items
+      .query({
+        query: "SELECT * FROM c WHERE c.user_id = @user_id",
+        parameters: [{ name: "@user_id", value: req.user.id }]
+      })
+      .fetchAll();
+
+    res.json(resources.sort((a, b) => Number(b.id) - Number(a.id)));
+  } catch (err) {
+    res.status(500).json({ message: "Could not load playlists", error: err.message });
+  }
 });
 
-app.delete("/api/playlists/:id", auth, (req, res) => {
-  db.run("DELETE FROM playlist_songs WHERE playlist_id=?", [req.params.id], () => {
-    db.run(
-      "DELETE FROM playlists WHERE id=? AND user_id=?",
-      [req.params.id, req.user.id],
-      function (err) {
-        if (err) return res.status(500).json({ message: "Playlist delete failed" });
-        res.json({ message: "Playlist deleted successfully" });
-      }
-    );
-  });
+app.post("/api/playlists/:playlistId/songs/:songId", auth, async (req, res) => {
+  try {
+    const { resource: playlist } = await playlistsContainer.item(req.params.playlistId, req.params.playlistId).read();
+
+    if (!playlist.songs) playlist.songs = [];
+    if (!playlist.songs.includes(req.params.songId)) playlist.songs.push(req.params.songId);
+
+    await playlistsContainer.item(req.params.playlistId, req.params.playlistId).replace(playlist);
+    res.json({ message: "Song added to playlist" });
+  } catch (err) {
+    res.status(500).json({ message: "Could not add song", error: err.message });
+  }
+});
+
+app.get("/api/playlists/:id/songs", auth, async (req, res) => {
+  try {
+    const { resource: playlist } = await playlistsContainer.item(req.params.id, req.params.id).read();
+    const { resources: songs } = await songsContainer.items.readAll().fetchAll();
+
+    res.json(songs.filter(s => playlist.songs && playlist.songs.includes(s.id)));
+  } catch (err) {
+    res.status(500).json({ message: "Could not load playlist songs", error: err.message });
+  }
+});
+
+app.delete("/api/playlists/:id", auth, async (req, res) => {
+  try {
+    await playlistsContainer.item(req.params.id, req.params.id).delete();
+    res.json({ message: "Playlist deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ message: "Playlist delete failed", error: err.message });
+  }
 });
 
 app.use((req, res) => {
   res.sendFile(path.join(publicPath, "index.html"));
 });
-
 
 app.listen(PORT, () => {
   console.log(`IndieWave running on port ${PORT}`);
