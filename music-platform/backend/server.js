@@ -328,7 +328,6 @@ app.use((req, res) => {
   res.sendFile(path.join(publicPath, "index.html"));
 });
 
-const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`IndieWave running on port ${PORT}`);
