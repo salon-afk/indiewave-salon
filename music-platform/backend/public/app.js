@@ -90,10 +90,15 @@ async function loginUser() {
 function logoutUser() {
   localStorage.removeItem("token");
   localStorage.removeItem("user");
+
   token = null;
   currentUser = null;
+
   setStatus();
-  location.reload();
+
+  alert("Logged out successfully ✅");
+
+  showView("home");
 }
 
 async function uploadSong() {
