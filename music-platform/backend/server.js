@@ -41,6 +41,75 @@ const containerName = process.env.AZURE_STORAGE_CONTAINER || "music-files";
 
 app.use(cors());
 app.use(express.json());
+
+app.post('/api/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'All fields required' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = {
+      id: email,
+      name,
+      email,
+      password: hashedPassword
+    };
+
+    await usersContainer.items.create(newUser);
+
+    res.json({ message: 'Register successful' });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Register failed' });
+  }
+});
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password required' });
+    }
+
+    const { resource: user } = await usersContainer.item(email, email).read();
+
+    if (!user) {
+      return res.status(400).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Wrong password' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, name: user.name },
+      process.env.JWT_SECRET || 'indiewave_secret_key',
+      { expiresIn: '2h' }
+    );
+
+    res.json({
+      message: 'Login successful',
+      token,
+      user: {
+        name: user.name,
+        email: user.email
+      }
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Login failed' });
+  }
+});
+
 app.use(express.urlencoded({ extended: true }));
 
 const publicPath = path.join(__dirname, "public");
