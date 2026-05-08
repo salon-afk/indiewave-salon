@@ -1,5 +1,6 @@
 const { BlobServiceClient } = require("@azure/storage-blob");
 const { CosmosClient } = require("@azure/cosmos");
+require('dotenv').config();
 const express = require("express");
 const multer = require("multer");
 const cors = require("cors");
@@ -9,6 +10,7 @@ const path = require("path");
 const fs = require("fs");
 
 const app = express();
+
 
 // ✅ Serve frontend files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -41,6 +43,15 @@ const containerName = process.env.AZURE_STORAGE_CONTAINER || "music-files";
 
 app.use(cors());
 app.use(express.json());
+
+const users = [
+  {
+    id: 1,
+    name: 'Salon',
+    email: 'test@gmail.com',
+    password: '$2b$10$KbQiKpK6H7Kp9XhVYtYkEe5YpWjKX5bWQz9xQ2zYj4K9j2Kp0zY6G' // password = 123456
+  }
+];
 
 app.post('/api/register', async (req, res) => {
   try {

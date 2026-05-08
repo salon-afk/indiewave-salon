@@ -33,36 +33,49 @@ async function register() {
   $("authMessage").textContent = data.message;
 }
 
-async function login() {
-  const res = await fetch("/api/login", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      email: $("email").value,
-      password: $("password").value
-    })
+async function loginUser() {
+  const email = document.querySelector('#email').value;
+  const password = document.querySelector('#password').value;
+
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ email, password })
   });
 
   const data = await res.json();
-  $("authMessage").textContent = data.message;
 
   if (data.token) {
-    token = data.token;
-    currentUser = data.user;
-    localStorage.setItem("token", token);
-    localStorage.setItem("user", JSON.stringify(currentUser));
-    setStatus();
-    showView("library");
+    localStorage.setItem('token', data.token);
+    localStorage.setItem('user', JSON.stringify(data.user));
+
+    alert('Login successful ✅');
+
+    // 👉 UPDATE UI
+    showUser();
+  } else {
+    alert(data.message);
   }
 }
 
-function logout() {
-  localStorage.clear();
-  token = null;
-  currentUser = null;
-  setStatus();
-  showView("home");
+function showUser() {
+  const user = JSON.parse(localStorage.getItem('user'));
+
+  if (user) {
+    document.getElementById('userStatus').innerText =
+      `Logged in as ${user.name}`;
+  }
 }
+
+function logoutUser() {
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  location.reload();
+}
+
+showUser();
 
 async function uploadSong() {
   if (!token) return alert("Please login first");
