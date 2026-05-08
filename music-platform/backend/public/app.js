@@ -4,6 +4,17 @@ let currentUser = JSON.parse(localStorage.getItem("user") || "null");
 
 const $ = id => document.getElementById(id);
 
+function setStatus() {
+  const userStatus = $("userStatus");
+  if (!userStatus) return;
+
+  if (token && currentUser) {
+    userStatus.textContent = `Logged in as ${currentUser.name || currentUser.email}`;
+  } else {
+    userStatus.textContent = "Not logged in";
+  }
+}
+
 function showView(id) {
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
   $(id).classList.add("active");
@@ -13,72 +24,77 @@ function showView(id) {
   if (id === "playlists") loadPlaylists();
 }
 
-function setStatus() {
-  $("userStatus").textContent = token ? `Logged in as ${currentUser.name}` : "Not logged in";
-}
-setStatus();
-
 async function register() {
-  const res = await fetch("/api/register", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      name: $("name").value,
-      email: $("email").value,
-      password: $("password").value
-    })
-  });
+  try {
+    const res = await fetch("/api/register", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        name: $("name").value,
+        email: $("email").value,
+        password: $("password").value
+      })
+    });
 
-  const data = await res.json();
-  $("authMessage").textContent = data.message;
-}
+    const data = await res.json();
 
-async function loginUser() {
-  const email = document.querySelector('#email').value;
-  const password = document.querySelector('#password').value;
+    $("authMessage").textContent = data.message || "Register failed";
 
-  const res = await fetch('/api/login', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ email, password })
-  });
-
-  const data = await res.json();
-
-  if (data.token) {
-  token = data.token;
-  currentUser = data.user;
-
-  localStorage.setItem("token", token);
-  localStorage.setItem("user", JSON.stringify(currentUser));
-
-  setStatus();
-  loadSongs();
-
-  alert("Login successful ✅");
-} else {
-    alert(data.message);
+    if (res.ok) {
+      alert("Register successful ✅ Now press Login");
+    } else {
+      alert(data.message || "Register failed");
+    }
+  } catch (err) {
+    $("authMessage").textContent = "Register error";
+    alert("Register error");
   }
 }
 
-function showUser() {
-  const user = JSON.parse(localStorage.getItem('user'));
+async function loginUser() {
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        email: $("email").value,
+        password: $("password").value
+      })
+    });
 
-  if (user) {
-    document.getElementById('userStatus').innerText =
-      `Logged in as ${user.name}`;
+    const data = await res.json();
+
+    if (!res.ok || !data.token) {
+      $("authMessage").textContent = data.message || "Login failed";
+      alert(data.message || "Login failed");
+      return;
+    }
+
+    token = data.token;
+    currentUser = data.user;
+
+    localStorage.setItem("token", token);
+    localStorage.setItem("user", JSON.stringify(currentUser));
+
+    setStatus();
+    $("authMessage").textContent = "Login successful ✅";
+    alert("Login successful ✅");
+
+    loadSongs();
+  } catch (err) {
+    $("authMessage").textContent = "Login error";
+    alert("Login error");
   }
 }
 
 function logoutUser() {
-  localStorage.removeItem('token');
-  localStorage.removeItem('user');
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+  token = null;
+  currentUser = null;
+  setStatus();
   location.reload();
 }
-
-showUser();
 
 async function uploadSong() {
   if (!token) return alert("Please login first");
@@ -160,10 +176,10 @@ function renderSongs(songs, containerId) {
       </p>
       <button onclick='playSong(${JSON.stringify(song)})'>Play</button>
       <button onclick='viewMetadata(${JSON.stringify(song)})' class="secondary">View Info</button>
-      <button onclick='toggleFavourite(${song.id}, ${song.liked || 0})'>${song.liked ? "♥ Liked" : "♡ Like"}</button>
+      <button onclick='toggleFavourite("${song.id}", ${song.liked || 0})'>${song.liked ? "♥ Liked" : "♡ Like"}</button>
       <button onclick='openEdit(${JSON.stringify(song)})'>Edit</button>
-      <button onclick='deleteSong(${song.id})' class="secondary">Delete</button>
-      <button onclick='quickAddToPlaylist(${song.id})' class="secondary">Add to Playlist</button>
+      <button onclick='deleteSong("${song.id}")' class="secondary">Delete</button>
+      <button onclick='quickAddToPlaylist("${song.id}")' class="secondary">Add to Playlist</button>
     `;
 
     container.appendChild(div);
@@ -173,7 +189,7 @@ function renderSongs(songs, containerId) {
 function playSong(song) {
   const player = $("audioPlayer");
 
-  if (song.file_path.startsWith("http")) {
+  if (song.file_path && song.file_path.startsWith("http")) {
     player.src = song.file_path;
   } else {
     player.src = window.location.origin + song.file_path;
@@ -197,6 +213,8 @@ async function toggleFavourite(songId, liked) {
 }
 
 async function loadFavourites() {
+  if (!token) return;
+
   const res = await fetch("/api/favourites", {
     headers: { Authorization: `Bearer ${token}` }
   });
@@ -277,6 +295,8 @@ async function createPlaylist() {
 }
 
 async function loadPlaylists() {
+  if (!token) return;
+
   const res = await fetch("/api/playlists", {
     headers: { Authorization: `Bearer ${token}` }
   });
@@ -291,8 +311,8 @@ async function loadPlaylists() {
     div.innerHTML = `
       <h3>${p.name}</h3>
       <p>${p.description || ""}</p>
-      <button onclick="viewPlaylistSongs(${p.id})">View Songs</button>
-      <button onclick="deletePlaylist(${p.id})" class="secondary">Delete</button>
+      <button onclick="viewPlaylistSongs('${p.id}')">View Songs</button>
+      <button onclick="deletePlaylist('${p.id}')" class="secondary">Delete</button>
     `;
     box.appendChild(div);
   });
@@ -377,4 +397,5 @@ function shufflePlay() {
   playSong(randomSong);
 }
 
+setStatus();
 loadSongs();
