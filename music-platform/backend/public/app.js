@@ -48,14 +48,17 @@ async function loginUser() {
   const data = await res.json();
 
   if (data.token) {
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data.user));
+  token = data.token;
+  currentUser = data.user;
 
-    alert('Login successful ✅');
+  localStorage.setItem("token", token);
+  localStorage.setItem("user", JSON.stringify(currentUser));
 
-    // 👉 UPDATE UI
-    showUser();
-  } else {
+  setStatus();
+  loadSongs();
+
+  alert("Login successful ✅");
+} else {
     alert(data.message);
   }
 }
